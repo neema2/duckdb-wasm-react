@@ -11,9 +11,14 @@ const DUCKDB_BUNDLES = {
     mainModule: '/duckdb/duckdb-mvp.wasm',
     mainWorker: '/duckdb/duckdb-browser-mvp.worker.js',
   },
+  eh: {
+    mainModule: '/duckdb/duckdb-eh.wasm',
+    mainWorker: '/duckdb/duckdb-browser-eh.worker.js',
+  },
 };
 
 const CSV_URL = 'https://raw.githubusercontent.com/plotly/datasets/master/iris.csv';
+const PARQUET_FILE_PATH = '/data/iris.parquet';
 
 function App() {
   const [db, setDb] = useState<duckdb.AsyncDuckDB | null>(null);
@@ -24,23 +29,79 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('Initializing DuckDB...');
   const [showExamples, setShowExamples] = useState<boolean>(false);
+  const [dataSource, setDataSource] = useState<'csv' | 'parquet'>('csv');
+  const [parquetLoaded, setParquetLoaded] = useState<boolean>(false);
 
-  const exampleQueries = [
+  const csvExampleQueries = [
     'SELECT * FROM iris LIMIT 10;',
     'SELECT Name, COUNT(*) as Count FROM iris GROUP BY Name;',
     'SELECT AVG(SepalLength) as AvgSepalLength, AVG(SepalWidth) as AvgSepalWidth, Name FROM iris GROUP BY Name;',
     'SELECT * FROM iris WHERE PetalLength > 5.0;',
     'SELECT * FROM iris ORDER BY SepalLength DESC LIMIT 5;'
   ];
+  
+  const parquetExampleQueries = [
+    'SELECT * FROM iris_parquet LIMIT 10;',
+    'SELECT Name, COUNT(*) as Count FROM iris_parquet GROUP BY Name;',
+    'SELECT AVG(SepalLength) as AvgSepalLength, AVG(SepalWidth) as AvgSepalWidth, Name FROM iris_parquet GROUP BY Name;',
+    'SELECT * FROM iris_parquet WHERE PetalLength > 5.0;',
+    'SELECT * FROM iris_parquet ORDER BY SepalLength DESC LIMIT 5;'
+  ];
+
+  const loadParquetData = async () => {
+    if (!conn || !db) {
+      setError('Database connection not initialized');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      setStatus('Loading parquet data...');
+      
+      await conn.query(`INSTALL parquet; LOAD parquet;`);
+      
+      const fullUrl = window.location.origin + PARQUET_FILE_PATH;
+      console.log('Loading parquet from URL:', fullUrl);
+      
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS iris_parquet AS 
+        SELECT * 
+        FROM read_parquet('${fullUrl}')
+      `);
+      
+      setParquetLoaded(true);
+      setStatus('Parquet data loaded successfully. Ready to query!');
+      
+      setQuery('SELECT * FROM iris_parquet LIMIT 10;');
+      setDataSource('parquet');
+    } catch (err) {
+      console.error('Failed to load parquet data', err);
+      setError(`Failed to load parquet data: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus('Error loading parquet data');
+      throw err; // Re-throw the error to ensure no fallback logic is used
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     const initDB = async () => {
       try {
         setStatus('Loading DuckDB WASM...');
-        const worker = new Worker(DUCKDB_BUNDLES.mvp.mainWorker);
+        const workerUrl = new URL(DUCKDB_BUNDLES.eh.mainWorker, window.location.origin);
+        const worker = new Worker(workerUrl);
         const logger = new duckdb.ConsoleLogger();
         const db = new duckdb.AsyncDuckDB(logger, worker);
-        await db.instantiate(DUCKDB_BUNDLES.mvp.mainModule);
+        await db.instantiate(DUCKDB_BUNDLES.eh.mainModule);
+        
+        try {
+          console.log('Using DuckDB bundle with parquet support');
+        } catch (err) {
+          console.warn('Could not initialize parquet support:', err);
+        }
+        
         setDb(db);
         
         const conn = await db.connect();
@@ -145,11 +206,43 @@ function App() {
               </Button>
             </div>
 
+            <div className="flex space-x-2 mb-4">
+              <Button
+                variant={dataSource === 'csv' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setDataSource('csv')}
+                className="text-xs"
+              >
+                CSV Data
+              </Button>
+              <Button
+                variant={dataSource === 'parquet' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (!parquetLoaded) {
+                    loadParquetData();
+                  } else {
+                    setDataSource('parquet');
+                    setQuery('SELECT * FROM iris_parquet LIMIT 10;');
+                  }
+                }}
+                className="text-xs"
+                disabled={loading || !conn}
+              >
+                {loading && dataSource === 'csv' && !parquetLoaded ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading Parquet...
+                  </span>
+                ) : 'Parquet Data'}
+              </Button>
+            </div>
+
             {showExamples && (
               <div className="mb-4 p-3 bg-gray-50 rounded-md border border-gray-200">
                 <p className="text-sm font-medium mb-2">Example Queries:</p>
                 <div className="space-y-2">
-                  {exampleQueries.map((example, index) => (
+                  {(dataSource === 'csv' ? csvExampleQueries : parquetExampleQueries).map((example, index) => (
                     <div 
                       key={index} 
                       className="text-xs font-mono bg-white p-2 rounded cursor-pointer hover:bg-blue-50 border border-gray-200"
@@ -234,7 +327,13 @@ function App() {
               <Info className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-gray-600">
                 <p className="mb-1"><strong>About the Dataset:</strong> The Iris dataset contains measurements of 150 iris flowers from three different species.</p>
-                <p>Use SQL queries to explore sepal length/width, petal length/width, and species name. Try filtering, grouping, and aggregating the data.</p>
+                <p className="mb-1">Use SQL queries to explore sepal length/width, petal length/width, and species name. Try filtering, grouping, and aggregating the data.</p>
+                <p className="mt-2"><strong>Data Sources:</strong></p>
+                <ul className="list-disc list-inside ml-2">
+                  <li><strong>CSV:</strong> Loaded from a public URL using <code>read_csv_auto</code></li>
+                  <li><strong>Parquet:</strong> Loaded from a local file using <code>read_parquet</code></li>
+                </ul>
+                <p className="mt-2 text-xs text-gray-500">DuckDB-WASM supports multiple file formats including CSV, Parquet, and JSON.</p>
               </div>
             </div>
           </div>
