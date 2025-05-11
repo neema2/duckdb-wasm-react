@@ -19,6 +19,7 @@ const DUCKDB_BUNDLES = {
 
 const CSV_URL = 'https://raw.githubusercontent.com/plotly/datasets/master/iris.csv';
 const PARQUET_FILE_PATH = '/data/iris.parquet';
+const ICEBERG_TABLE_URL = 'https://s3.amazonaws.com/hyperparam-iceberg/spark/bunnies'; // Public demo Iceberg table
 
 function App() {
   const [db, setDb] = useState<duckdb.AsyncDuckDB | null>(null);
@@ -29,8 +30,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('Initializing DuckDB...');
   const [showExamples, setShowExamples] = useState<boolean>(false);
-  const [dataSource, setDataSource] = useState<'csv' | 'parquet'>('csv');
+  const [dataSource, setDataSource] = useState<'csv' | 'parquet' | 'iceberg'>('csv');
   const [parquetLoaded, setParquetLoaded] = useState<boolean>(false);
+  const [icebergLoaded, setIcebergLoaded] = useState<boolean>(false);
+  const [icebergVersion, setIcebergVersion] = useState<string | null>(null);
+  const [icebergVersions, setIcebergVersions] = useState<string[]>([]);
 
   const csvExampleQueries = [
     'SELECT * FROM iris LIMIT 10;',
@@ -46,6 +50,14 @@ function App() {
     'SELECT AVG(SepalLength) as AvgSepalLength, AVG(SepalWidth) as AvgSepalWidth, Name FROM iris_parquet GROUP BY Name;',
     'SELECT * FROM iris_parquet WHERE PetalLength > 5.0;',
     'SELECT * FROM iris_parquet ORDER BY SepalLength DESC LIMIT 5;'
+  ];
+  
+  const icebergExampleQueries = [
+    'SELECT * FROM iceberg_data LIMIT 10;',
+    'SELECT count(*) FROM iceberg_data;',
+    'SELECT * FROM iceberg_data ORDER BY id LIMIT 5;',
+    'SELECT category, COUNT(*) as Count FROM iceberg_data GROUP BY category;',
+    'SELECT AVG(value) as AvgValue FROM iceberg_data;'
   ];
 
   const loadParquetData = async () => {
@@ -82,6 +94,124 @@ function App() {
       setStatus('Error loading parquet data');
       throw err; // Re-throw the error to ensure no fallback logic is used
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadIcebergData = async (version?: string) => {
+    if (!conn || !db) {
+      setError('Database connection not initialized');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      setStatus('Loading Iceberg data...');
+      
+      await conn.query(`INSTALL parquet; LOAD parquet;`);
+      
+      const { icebergMetadata, icebergLatestVersion, icebergListVersions } = await import('icebird');
+      
+      const metadataFileName = version ? `${version}.metadata.json` : undefined;
+      
+      // Get all available versions of the Iceberg table
+      const versions = await icebergListVersions({ tableUrl: ICEBERG_TABLE_URL });
+      setIcebergVersions(versions);
+      
+      const metadata = await icebergMetadata({ 
+        tableUrl: ICEBERG_TABLE_URL,
+        metadataFileName
+      });
+      
+      const currentVersion = version || (await icebergLatestVersion({ tableUrl: ICEBERG_TABLE_URL }));
+      setIcebergVersion(currentVersion);
+      
+      const { icebergManifests } = await import('icebird');
+      const manifestList = await icebergManifests(metadata);
+      
+      // Convert manifest entries to array and filter out deleted entries
+      const manifestEntries = Array.from(manifestList.entries());
+      const dataEntries = manifestEntries.flatMap(([_, manifest]) => 
+        manifest.entries.filter((entry: any) => entry.status !== 2)
+      );
+      
+      if (dataEntries.length === 0) {
+        throw new Error('No data files found in Iceberg manifest');
+      }
+      
+      await conn.query(`DROP TABLE IF EXISTS iceberg_data`);
+      
+      const schemaFields = metadata.schemas.find(s => s['schema-id'] === metadata['current-schema-id'])?.fields;
+      if (!schemaFields) {
+        throw new Error('Schema not found in Iceberg metadata');
+      }
+      
+      for (let i = 0; i < Math.min(dataEntries.length, 3); i++) { // Limit to first 3 files for performance
+        const dataFile = dataEntries[i].data_file;
+        const fileUrl = dataFile.file_path;
+        
+        const tableName = i === 0 ? 'iceberg_data' : `temp_iceberg_${i}`;
+        await conn.query(`
+          CREATE TABLE ${tableName} AS 
+          SELECT * 
+          FROM read_parquet('${fileUrl}')
+        `);
+        
+        if (i > 0) {
+          await conn.query(`
+            INSERT INTO iceberg_data
+            SELECT * FROM ${tableName}
+          `);
+          
+          await conn.query(`DROP TABLE ${tableName}`);
+        }
+      }
+      
+      setIcebergLoaded(true);
+      setStatus(`Iceberg data loaded successfully (version ${currentVersion}). Ready to query!`);
+      
+      setQuery('SELECT * FROM iceberg_data LIMIT 10;');
+      setDataSource('iceberg');
+    } catch (err) {
+      console.error('Failed to load Iceberg data', err);
+      setError(`Failed to load Iceberg data: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus('Error loading Iceberg data');
+      throw err; // Re-throw the error to ensure no fallback logic is used
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const refreshIcebergData = async () => {
+    if (!conn || !db) {
+      setError('Database connection not initialized');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      setStatus('Checking for Iceberg table updates...');
+      
+      const { icebergLatestVersion } = await import('icebird');
+      
+      // Get the latest version of the Iceberg table
+      const latestVersion = await icebergLatestVersion({ tableUrl: ICEBERG_TABLE_URL });
+      
+      if (latestVersion !== icebergVersion) {
+        setStatus(`Found new version: ${latestVersion}. Loading...`);
+        await loadIcebergData(latestVersion);
+      } else {
+        setStatus(`Already at latest version: ${latestVersion}`);
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error('Failed to refresh Iceberg data', err);
+      setError(`Failed to refresh Iceberg data: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus('Error refreshing Iceberg data');
       setLoading(false);
     }
   };
@@ -236,13 +366,69 @@ function App() {
                   </span>
                 ) : 'Parquet Data'}
               </Button>
+              <Button
+                variant={dataSource === 'iceberg' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (!icebergLoaded) {
+                    loadIcebergData();
+                  } else {
+                    setDataSource('iceberg');
+                    setQuery('SELECT * FROM iceberg_data LIMIT 10;');
+                  }
+                }}
+                className="text-xs"
+                disabled={loading || !conn}
+              >
+                {loading && dataSource !== 'iceberg' && !icebergLoaded ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading Iceberg...
+                  </span>
+                ) : 'Iceberg Data'}
+              </Button>
             </div>
+            
+            {dataSource === 'iceberg' && icebergVersions.length > 0 && (
+              <div className="flex flex-col space-y-2 mt-2 mb-4">
+                <p className="text-xs text-gray-600">Iceberg Version:</p>
+                <div className="flex flex-wrap gap-1">
+                  {icebergVersions.map((version) => (
+                    <Button
+                      key={version}
+                      variant={icebergVersion === version ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => loadIcebergData(version)}
+                      className="text-xs"
+                      disabled={loading}
+                    >
+                      {version}
+                    </Button>
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={refreshIcebergData}
+                  className="text-xs flex items-center gap-1"
+                  disabled={loading}
+                >
+                  <Loader2 className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+                  Check for Updates
+                </Button>
+              </div>
+            )}
 
             {showExamples && (
               <div className="mb-4 p-3 bg-gray-50 rounded-md border border-gray-200">
                 <p className="text-sm font-medium mb-2">Example Queries:</p>
                 <div className="space-y-2">
-                  {(dataSource === 'csv' ? csvExampleQueries : parquetExampleQueries).map((example, index) => (
+                  {(dataSource === 'csv' 
+                    ? csvExampleQueries 
+                    : dataSource === 'parquet' 
+                      ? parquetExampleQueries 
+                      : icebergExampleQueries
+                  ).map((example, index) => (
                     <div 
                       key={index} 
                       className="text-xs font-mono bg-white p-2 rounded cursor-pointer hover:bg-blue-50 border border-gray-200"
@@ -332,6 +518,7 @@ function App() {
                 <ul className="list-disc list-inside ml-2">
                   <li><strong>CSV:</strong> Loaded from a public URL using <code>read_csv_auto</code></li>
                   <li><strong>Parquet:</strong> Loaded from a local file using <code>read_parquet</code></li>
+                  <li><strong>Iceberg:</strong> Parquet files extracted from Iceberg metadata using the <code>icebird</code> library</li>
                 </ul>
                 <p className="mt-2 text-xs text-gray-500">DuckDB-WASM supports multiple file formats including CSV, Parquet, and JSON.</p>
               </div>
