@@ -44,8 +44,9 @@ async function testIcebergTimeTravel() {
       console.log('Schema ID:', metadata['current-schema-id']);
       console.log('Fields:', schema?.fields);
       
-      const snapshot = metadata.snapshots.find(s => s.snapshot_id.toString() === version);
-      console.log('Snapshot:', snapshot);
+      console.log('Snapshots:', metadata.snapshots);
+      const snapshot = metadata.snapshots[metadata.snapshots.length - 1]; // Use latest snapshot
+      console.log('Using snapshot:', snapshot);
       
       const manifestList = await icebergManifests(metadata);
       const manifestEntries = Array.from(manifestList.entries());

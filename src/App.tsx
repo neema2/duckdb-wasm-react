@@ -148,25 +148,57 @@ function App() {
         throw new Error('Schema not found in Iceberg metadata');
       }
       
-      for (let i = 0; i < Math.min(dataEntries.length, 3); i++) { // Limit to first 3 files for performance
-        const dataFile = dataEntries[i].data_file;
-        const fileUrl = dataFile.file_path;
+      if (dataEntries.length > 0) {
+        const dataFile = dataEntries[0].data_file;
+        // Convert s3a:// URLs to https:// URLs for browser access
+        const originalUrl = dataFile.file_path;
+        const fileUrl = originalUrl.replace('s3a://', 'https://s3.amazonaws.com/');
+        console.log(`Converting Iceberg parquet URL: ${originalUrl} -> ${fileUrl}`);
         
-        const tableName = i === 0 ? 'iceberg_data' : `temp_iceberg_${i}`;
-        await conn.query(`
-          CREATE TABLE ${tableName} AS 
-          SELECT * 
-          FROM read_parquet('${fileUrl}')
-        `);
-        
-        if (i > 0) {
+        try {
           await conn.query(`
-            INSERT INTO iceberg_data
-            SELECT * FROM ${tableName}
+            CREATE TABLE iceberg_data AS 
+            SELECT * 
+            FROM read_parquet('${fileUrl}')
           `);
           
-          await conn.query(`DROP TABLE ${tableName}`);
+          for (let i = 1; i < Math.min(dataEntries.length, 3); i++) {
+            const additionalFile = dataEntries[i].data_file;
+            const additionalUrl = additionalFile.file_path.replace('s3a://', 'https://s3.amazonaws.com/');
+            console.log(`Loading additional Iceberg file: ${additionalUrl}`);
+            
+            // Get the schema of the main table to ensure we use matching columns
+            const mainTableSchema = await conn.query(`DESCRIBE iceberg_data`);
+            const mainTableColumns = mainTableSchema.toArray().map(row => row.column_name);
+            
+            const tempTableName = `temp_iceberg_${i}`;
+            await conn.query(`
+              CREATE TABLE ${tempTableName} AS 
+              SELECT * 
+              FROM read_parquet('${additionalUrl}')
+            `);
+            
+            // Get the schema of the temporary table
+            const tempTableSchema = await conn.query(`DESCRIBE ${tempTableName}`);
+            const tempTableColumns = tempTableSchema.toArray().map(row => row.column_name);
+            
+            const commonColumns = mainTableColumns.filter(col => tempTableColumns.includes(col));
+            
+            if (commonColumns.length > 0) {
+              await conn.query(`
+                INSERT INTO iceberg_data (${commonColumns.join(', ')})
+                SELECT ${commonColumns.join(', ')} FROM ${tempTableName}
+              `);
+            }
+            
+            await conn.query(`DROP TABLE ${tempTableName}`);
+          }
+        } catch (err) {
+          console.error(`Failed to load Iceberg data:`, err);
+          throw new Error(`Failed to load Iceberg data: ${err instanceof Error ? err.message : String(err)}`);
         }
+      } else {
+        throw new Error('No data files found in Iceberg manifest');
       }
       
       setIcebergLoaded(true);
