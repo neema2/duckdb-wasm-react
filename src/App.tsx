@@ -37,6 +37,8 @@ function App() {
   const [icebergLoaded, setIcebergLoaded] = useState<boolean>(false);
   const [icebergVersion, setIcebergVersion] = useState<string | null>(null);
   const [icebergVersions, setIcebergVersions] = useState<string[]>([]);
+  const [manifestFilePath, setManifestFilePath] = useState<string | null>(null);
+  const [parquetFilePaths, setParquetFilePaths] = useState<{original: string, converted: string}[]>([]);
 
   const csvExampleQueries = [
     'SELECT * FROM iris LIMIT 10;',
@@ -122,6 +124,9 @@ function App() {
       const versions = await icebergListVersions({ tableUrl: ICEBERG_TABLE_URL });
       setIcebergVersions(versions);
       
+      const manifestPath = `${ICEBERG_TABLE_URL}/${metadataFileName || (await icebergLatestVersion({ tableUrl: ICEBERG_TABLE_URL })) + '.metadata.json'}`;
+      setManifestFilePath(manifestPath);
+      
       const metadata = await icebergMetadata({ 
         tableUrl: ICEBERG_TABLE_URL,
         metadataFileName
@@ -150,11 +155,15 @@ function App() {
         throw new Error('Schema not found in Iceberg metadata');
       }
       
+      const paths: {original: string, converted: string}[] = [];
+      
       if (dataEntries.length > 0) {
+        
         const dataFile = dataEntries[0].data_file;
         // Convert s3a:// URLs to https:// URLs for browser access
         const originalUrl = dataFile.file_path;
         const fileUrl = originalUrl.replace('s3a://', 'https://s3.amazonaws.com/');
+        paths.push({ original: originalUrl, converted: fileUrl });
         console.log(`Converting Iceberg parquet URL: ${originalUrl} -> ${fileUrl}`);
         
         try {
@@ -167,6 +176,7 @@ function App() {
           for (let i = 1; i < Math.min(dataEntries.length, 3); i++) {
             const additionalFile = dataEntries[i].data_file;
             const additionalUrl = additionalFile.file_path.replace('s3a://', 'https://s3.amazonaws.com/');
+            paths.push({ original: additionalFile.file_path, converted: additionalUrl });
             console.log(`Loading additional Iceberg file: ${additionalUrl}`);
             
             // Get the schema of the main table to ensure we use matching columns
@@ -202,6 +212,8 @@ function App() {
       } else {
         throw new Error('No data files found in Iceberg manifest');
       }
+      
+      setParquetFilePaths(paths);
       
       setIcebergLoaded(true);
       setStatus(`Iceberg data loaded successfully (version ${currentVersion}). Ready to query!`);
@@ -451,6 +463,40 @@ function App() {
                   <Loader2 className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                   Check for Updates
                 </Button>
+                
+                {/* Display Iceberg File Paths */}
+                {icebergLoaded && (
+                  <div className="mt-4 border border-gray-200 rounded-md p-3 bg-gray-50">
+                    <p className="text-xs font-medium mb-2">Iceberg File Paths:</p>
+                    
+                    {manifestFilePath && (
+                      <div className="mb-2">
+                        <p className="text-xs font-semibold">Manifest File:</p>
+                        <p className="text-xs font-mono break-all bg-white p-1 rounded border border-gray-200">
+                          {manifestFilePath}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {parquetFilePaths.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold">Parquet Data Files:</p>
+                        <div className="max-h-40 overflow-y-auto">
+                          {parquetFilePaths.map((path, index) => (
+                            <div key={index} className="mb-1 text-xs">
+                              <p className="font-mono break-all bg-white p-1 rounded border border-gray-200">
+                                <span className="font-semibold">Original:</span> {path.original}
+                              </p>
+                              <p className="font-mono break-all bg-white p-1 rounded border border-gray-200 mt-1">
+                                <span className="font-semibold">Converted:</span> {path.converted}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
