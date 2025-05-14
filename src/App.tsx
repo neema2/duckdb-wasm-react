@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './com
 import { Database, Info, Loader2 } from 'lucide-react';
 import './App.css';
 
+const APP_VERSION = '1.1.0-' + Date.now();
+
 const DUCKDB_BUNDLES = {
   mvp: {
     mainModule: '/duckdb/duckdb-mvp.wasm',
@@ -409,15 +411,16 @@ function App() {
                     setQuery('SELECT * FROM iceberg_data LIMIT 10;');
                   }
                 }}
-                className="text-xs"
+                className="text-xs font-bold border-2 border-blue-400 hover:bg-blue-100"
                 disabled={loading || !conn}
+                id="iceberg-data-button"
               >
                 {loading && dataSource !== 'iceberg' && !icebergLoaded ? (
                   <span className="flex items-center gap-2">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Loading Iceberg...
                   </span>
-                ) : 'Iceberg Data'}
+                ) : '🧊 Iceberg Data'}
               </Button>
             </div>
             
@@ -553,6 +556,7 @@ function App() {
                   <li><strong>Iceberg:</strong> Parquet files extracted from Iceberg metadata using the <code>icebird</code> library</li>
                 </ul>
                 <p className="mt-2 text-xs text-gray-500">DuckDB-WASM supports multiple file formats including CSV, Parquet, and JSON.</p>
+                <p className="mt-2 text-xs text-gray-400">Version: {APP_VERSION}</p>
               </div>
             </div>
           </div>
