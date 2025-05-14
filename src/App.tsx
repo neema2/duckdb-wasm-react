@@ -436,6 +436,7 @@ function App() {
               </Button>
             </div>
             
+            {/* Iceberg Version Selection */}
             {dataSource === 'iceberg' && icebergVersions.length > 0 && (
               <div className="flex flex-col space-y-2 mt-2 mb-4">
                 <p className="text-xs text-gray-600">Iceberg Version:</p>
@@ -463,38 +464,52 @@ function App() {
                   <Loader2 className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                   Check for Updates
                 </Button>
+              </div>
+            )}
+            
+            {/* Display Iceberg File Paths - Always visible when Iceberg is selected */}
+            {dataSource === 'iceberg' && (
+              <div className="mt-4 mb-4 border-2 border-blue-300 rounded-md p-4 bg-blue-50 shadow-md">
+                <p className="text-sm font-bold mb-3 text-blue-800">📁 Iceberg File Paths:</p>
                 
-                {/* Display Iceberg File Paths */}
-                {icebergLoaded && (
-                  <div className="mt-4 border border-gray-200 rounded-md p-3 bg-gray-50">
-                    <p className="text-xs font-medium mb-2">Iceberg File Paths:</p>
-                    
-                    {manifestFilePath && (
-                      <div className="mb-2">
-                        <p className="text-xs font-semibold">Manifest File:</p>
-                        <p className="text-xs font-mono break-all bg-white p-1 rounded border border-gray-200">
-                          {manifestFilePath}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {parquetFilePaths.length > 0 && (
-                      <div>
-                        <p className="text-xs font-semibold">Parquet Data Files:</p>
-                        <div className="max-h-40 overflow-y-auto">
-                          {parquetFilePaths.map((path, index) => (
-                            <div key={index} className="mb-1 text-xs">
-                              <p className="font-mono break-all bg-white p-1 rounded border border-gray-200">
-                                <span className="font-semibold">Original:</span> {path.original}
-                              </p>
-                              <p className="font-mono break-all bg-white p-1 rounded border border-gray-200 mt-1">
-                                <span className="font-semibold">Converted:</span> {path.converted}
-                              </p>
-                            </div>
-                          ))}
+                {manifestFilePath ? (
+                  <div className="mb-3">
+                    <p className="text-xs font-semibold text-blue-700">Manifest File:</p>
+                    <p className="text-xs font-mono break-all bg-white p-2 rounded border border-gray-200">
+                      {manifestFilePath}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mb-3">
+                    <p className="text-xs font-semibold text-blue-700">Manifest File:</p>
+                    <p className="text-xs italic text-gray-500">
+                      {loading ? "Loading manifest file path..." : "No manifest file loaded yet. Click the Iceberg Data button to load."}
+                    </p>
+                  </div>
+                )}
+                
+                {parquetFilePaths.length > 0 ? (
+                  <div>
+                    <p className="text-xs font-semibold text-blue-700">Parquet Data Files:</p>
+                    <div className="max-h-40 overflow-y-auto">
+                      {parquetFilePaths.map((path, index) => (
+                        <div key={index} className="mb-2 text-xs">
+                          <p className="font-mono break-all bg-white p-2 rounded border border-gray-200">
+                            <span className="font-semibold">Original:</span> {path.original}
+                          </p>
+                          <p className="font-mono break-all bg-white p-2 rounded border border-gray-200 mt-1">
+                            <span className="font-semibold">Converted:</span> {path.converted}
+                          </p>
                         </div>
-                      </div>
-                    )}
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs font-semibold text-blue-700">Parquet Data Files:</p>
+                    <p className="text-xs italic text-gray-500">
+                      {loading ? "Loading parquet file paths..." : "No parquet files loaded yet. Click the Iceberg Data button to load."}
+                    </p>
                   </div>
                 )}
               </div>
